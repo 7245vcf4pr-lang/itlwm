@@ -1,0 +1,88 @@
+name: Build AirportItlwm Patch0004 (macOS15 Sequoia)
+on:
+  workflow_dispatch: # ✅ 手动点击触发，推荐
+jobs:
+  build:
+    runs-on: macos-15
+    env:
+      ITLWM_COMMIT: "3681207482b904001f48010188822890240c0771"
+      MACSDK_COMMIT: "3f750085caa17ec3a7880f11c11bf4f48cd6a164"
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Lock stable commit
+        run: |
+          git checkout ${{ env.ITLWM_COMMIT }}
+      - name: Download MacKernelSDK
+        run: |
+          git clone https://github.com/acidanthera/MacKernelSDK.git
+          cd MacKernelSDK
+          git checkout ${{ env.MACSDK_COMMIT }}
+      - name: Write Patch0004 diff
+        run: |
+          cat > 0004.diff <<'EOF'
+diff --git a/itlwm/airport/airport_scan.cpp b/itlwm/airport/airport_scan.cpp
+index 81c72c6..2962474 100644
+--- a/itlwm/airport/airport_scan.cpp
++++ b/itlwm/airport/airport_scan.cpp
+@@ -312,6 +312,18 @@ bool AirportScan::start_scan(const AMScanRequest *req)
+         return false;
+     }
+ 
++    // Patch0004: faster rejoin after wake
++    if (state == SCAN_RUNNING) {
++        cancel_scan();
++        IOLog("itlwm: Patch0004: abort ongoing scan for targeted rejoin scan\n");
++    }
++    skip_complete_notice = true;
++    state = SCAN_RUNNING;
++
+     // Build channel list
+     vector<int> chans;
+     for (auto ch : req->channels) {
+@@ -446,6 +458,9 @@ void AirportScan::scan_done()
+     if (state != SCAN_RUNNING)
+         return;
+ 
++    if (skip_complete_notice) {
++        skip_complete_notice = false;
++        return;
++    }
+     state = SCAN_IDLE;
+     IOLog("itlwm: scan complete, %d results\n", (int)results.size());
+     deliver_results();
+diff --git a/itlwm/airport/airport_scan.hpp b/itlwm/airport/airport_scan.hpp
+index 74e2581..f2ac245 100644
+--- a/itlwm/airport/airport_scan.hpp
++++ b/itlwm/airport/airport_scan.hpp
+@@ -104,6 +104,7 @@ private:
+     ScanState state = SCAN_IDLE;
+     bool scan_abort = false;
+     bool scan_paused = false;
++    bool skip_complete_notice = false;
+
+     AMScanRequest active_req{};
+     vector<int> scan_channels;
+EOF
+          # 清除CRLF，杜绝corrupt patch
+          sed -i '' 's/\r$//' 0004.diff
+      - name: Apply patch
+        run: |
+          git apply 0004.diff
+      - name: Build AirportItlwm-Sequoia
+        run: |
+          xcodebuild -project itlwm.xcodeproj \
+          -scheme AirportItlwm-Sequoia \
+          -configuration Release \
+          ARCHS=x86_64 \
+          CODE_SIGNING_ALLOWED=NO \
+          build
+      - name: Zip kext
+        run: |
+          cp -r build/Release/AirportItlwm.kext AirportItlwm-Patch0004.kext
+          zip -r AirportItlwm-Patch0004.zip AirportItlwm-Patch0004.kext
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirportItlwm-Patch0004
+          path: AirportItlwm-Patch0004.zip
